@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>promptfoo Evaluation Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .terminal {
+            background-color: #1a1a1a;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            padding: 1rem;
+            color: #f0f0f0;
+            line-height: 1.2;
+            overflow-x: auto;
+            white-space: pre;
+            min-height: 400px;
+            font-size: 14px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .terminal::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+        .terminal::-webkit-scrollbar-track {
+            background: #2a2a2a;
+        }
+        .terminal::-webkit-scrollbar-thumb {
+            background-color: #555;
+            border-radius: 6px;
+            border: 3px solid #2a2a2a;
+        }
+        .terminal.running::after {
+            content: '█';
+            animation: blink 1s infinite;
+            margin-left: 2px;
+        }
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+        body {
+            background-color: #1a1a1a;
+            color: #f0f0f0;
+        }
+        .error-text {
+            color: #ff6b6b;
+        }
+        .success-text {
+            color: #69db7c;
+        }
+        /* Override any background colors from ansi-to-html */
+        .terminal span[style*="background"] {
+            background: transparent !important;
+        }
+        /* Ensure all text is visible */
+        .terminal span {
+            display: inline;
+        }
+        /* Fix box drawing characters */
+        .terminal span[style*="color: rgb(136, 136, 136)"] {
+            color: #aaa !important;
+        }
+        /* Improve table display */
+        .terminal div {
+            line-height: 1.2;
+            margin: 0;
+            padding: 0;
+        }
+        /* Make output use all available width */
+        #terminal-container {
+            width: 100%;
+            max-width: 100%;
+            overflow-x: hidden;
+        }
+        .instructions {
+            background-color: #2a2a2a;
+            border-left: 4px solid #4299e1;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 0.25rem;
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div class="p-4">
+        <div class="mb-6">
+            <h1 class="text-2xl font-bold mb-4">promptfoo Evaluation Tool</h1>
+            
+            <div class="instructions mb-6">
+                <h2 class="text-lg font-semibold mb-2">How to use this tool:</h2>
+                <ol class="list-decimal pl-5 space-y-1">
+                    <li>Enter the API URL (already filled in for you)</li>
+                    <li>Get your API key from <a href="https://aiproxy.sanand.workers.dev/" target="_blank" class="text-blue-400 hover:underline">aiproxy.sanand.workers.dev</a> (log in with IITM email)</li>
+                    <li>Click "Run Evaluation" to test the AI responses</li>
+                    <li>Results will appear below in real-time</li>
+                </ol>
+            </div>
+            
+            <form id="configForm" class="space-y-4 max-w-2xl">
+                <div>
+                    <label for="apiUrl" class="block text-sm font-medium mb-1">API URL</label>
+                    <input type="text" id="apiUrl" name="apiUrl" required
+                        placeholder="http://localhost:8000/ask"
+                        class="w-full rounded bg-[#2a2a2a] border border-gray-700 p-2 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                </div>
+                <div>
+                    <label for="apiKey" class="block text-sm font-medium mb-1">API Key from aiproxy.sanand.workers.dev</label>
+                    <input type="password" id="apiKey" name="apiKey" required
+                        placeholder="Paste your API key (starts with eyJh...)" 
+                        class="w-full rounded bg-[#2a2a2a] border border-gray-700 p-2 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                </div>
+                <button type="submit"
+                    class="bg-blue-600 text-white py-2 px-6 rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-[#1a1a1a] disabled:opacity-50 disabled:cursor-not-allowed">
+                    Run Evaluation
+                </button>
+            </form>
+        </div>
+
+        <div id="error" class="hidden mb-4">
+            <div class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-3 rounded" role="alert">
+                <span id="errorMessage" class="block"></span>
+            </div>
+        </div>
+
+        <div id="terminal-container" class="w-full overflow-hidden">
+            <div id="output" class="terminal">Waiting to start evaluation...
+
+To begin, enter your RAG Application API URL and API key from aiproxy.sanand.workers.dev and click "Run Evaluation".</div>
+        </div>
+    </div>
+
+    <script>
+        const terminal = document.getElementById('output');
+        const form = document.getElementById('configForm');
+        const errorDiv = document.getElementById('error');
+        const errorMessage = document.getElementById('errorMessage');
+        let eventSource = null;
+        
+        // Set terminal width to match container width
+        function adjustTerminalWidth() {
+            const container = document.getElementById('terminal-container');
+            terminal.style.width = container.offsetWidth + 'px';
+        }
+        
+        // Call on load and resize
+        window.addEventListener('resize', adjustTerminalWidth);
+        window.addEventListener('load', adjustTerminalWidth);
+
+        function appendToTerminal(html, className = '') {
+            // Create a container for this output chunk
+            const container = document.createElement('div');
+            container.style.display = 'inline';
+            container.innerHTML = html;
+            
+            if (className) {
+                container.className = className;
+            }
+            
+            terminal.appendChild(container);
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        function clearTerminal() {
+            terminal.textContent = '';
+        }
+
+        function setupEventSource() {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource('/events');
+            
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                switch (data.type) {
+                    case 'start':
+                        clearTerminal();
+                        terminal.classList.add('running');
+                        appendToTerminal(data.html || data.message);
+                        break;
+                    case 'output':
+                        appendToTerminal(data.html || data.message);
+                        break;
+                    case 'error':
+                        appendToTerminal(data.html || data.message, 'error-text');
+                        break;
+                    case 'end':
+                        terminal.classList.remove('running');
+                        appendToTerminal(data.html || data.message, data.code === 0 ? 'success-text' : 'error-text');
+                        break;
+                }
+            };
+
+            eventSource.onerror = () => {
+                terminal.classList.remove('running');
+                appendToTerminal('\nConnection to server lost. Please refresh the page.\n', 'error-text');
+                eventSource.close();
+            };
+        }
+
+        // Set up SSE connection when page loads
+        setupEventSource();
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const apiUrl = document.getElementById('apiUrl').value;
+            const apiKey = document.getElementById('apiKey').value;
+            const submitButton = form.querySelector('button[type="submit"]');
+            
+            try {
+                errorDiv.classList.add('hidden');
+                submitButton.disabled = true;
+                
+                const response = await fetch('/update-config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ apiUrl, apiKey }),
+                });
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'An error occurred');
+                }
+            } catch (error) {
+                errorDiv.classList.remove('hidden');
+                errorMessage.textContent = error.message;
+                terminal.classList.remove('running');
+                appendToTerminal('\nFailed to start evaluation. Check the error message above.\n', 'error-text');
+            } finally {
+                submitButton.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html> 
